@@ -5,7 +5,7 @@ import { MessagesRepository } from "../repositories/messagesRepository";
 const router = express.Router();
 const clientContactRepository = new ClientContactRepository();
 const messagesRepository = new MessagesRepository();
-const DAYS_TO_KEEP = 1; // 1 dia
+const DAYS_TO_KEEP = 60; // 60 dias
 
 // GET /api/contacts
 router.get("/", async (_: Request, res: Response) => {
