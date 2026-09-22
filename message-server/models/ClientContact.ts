@@ -4,6 +4,7 @@ export interface IClientContact extends Document {
   whatsappName: string;
   phone: string;
   status: string;
+  tag?: string | null;
   service?: string | null;
   form?: {
     nome?: string;
@@ -33,6 +34,7 @@ const ClientContactSchema = new Schema<IClientContact>(
     whatsappName: { type: String, required: true },
     phone: { type: String, required: true, unique: true },
     status: { type: String, required: true },
+    tag: { type: String, default: null },
     service: { type: String, default: null },
     boardId: { type: String, default: null },
     groupId: { type: String, default: null },
@@ -60,6 +62,16 @@ const ClientContactSchema = new Schema<IClientContact>(
   { timestamps: true }
 );
 
+const MODEL_NAME = 'ClientContact';
+
+// Garante que o model em cache incorpore campos novos (ex.: tag)
+if (mongoose.models[MODEL_NAME]) {
+  const cachedModel = mongoose.models[MODEL_NAME];
+  if (!cachedModel.schema.path('tag')) {
+    cachedModel.schema.add({ tag: { type: String, default: null } });
+  }
+}
+
 export const ClientContactModel =
-  mongoose.models.ClientContact ||
-  mongoose.model<IClientContact>('ClientContact', ClientContactSchema);
+  (mongoose.models[MODEL_NAME] as mongoose.Model<IClientContact>) ||
+  mongoose.model<IClientContact>(MODEL_NAME, ClientContactSchema);

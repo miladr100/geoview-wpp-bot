@@ -3,6 +3,7 @@ export interface ClientContact {
     whatsappName: string | null;
     phone: string;
     status: string;
+    tag?: string | null;
     service?: string | null;
     form?: {
         nome_solicitante?: string;

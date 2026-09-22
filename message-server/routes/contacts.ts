@@ -55,15 +55,15 @@ router.patch("/", async (req: Request, res: Response) => {
     const validatedData = UpdateClientContactSchema.parse(req.body);
     const { phone, ...updateData } = validatedData;
 
-    const result = await clientContactRepository.updateContactByPhone(phone || "", updateData);
+    const updated = await clientContactRepository.updateContactByPhone(phone || "", updateData);
 
-    if (result.matchedCount === 0) {
+    if (!updated) {
       const parsed = CreateClientContactSchema.parse(req.body);
       const created = await clientContactRepository.insertNewContact(parsed);
       return res.status(201).json(created);
     }
 
-    return res.json({ success: true });
+    return res.json(updated);
   } catch (err) {
     if (err instanceof ZodError) {
       return res.status(400).json({

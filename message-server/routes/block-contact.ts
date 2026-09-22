@@ -8,15 +8,19 @@ import { API_KEY } from "../env";
 // POST /api/contacts
 router.post("/", async (req: Request, res: Response) => {
   try {
-    const { phone, name } = req.body;
+    const { phone, name, tag } = req.body;
 
     if (!phone) {
       return res.status(400).json({ error: 'Número de telefone obrigatório' });
     }
 
+    const whatsappName = name || "Desconhecido";
+    const normalizedTag = typeof tag === "string" && tag.trim() ? tag.trim() : null;
+
     const newContact = {
         phone,
-        whatsappName: name || "Desconhecido",
+        whatsappName,
+        tag: normalizedTag,
         status: "bloqueado",
         block: true,
         hasMedia: false,
@@ -30,10 +34,21 @@ router.post("/", async (req: Request, res: Response) => {
     });
 
     if(result.ok) {
-      console.log("Contato bloqueado com sucesso", phone);
-      return res.json({ message: 'Contato bloqueado com sucesso', phone, whatsappName: name });
+      const savedContact = await result.json();
+      console.log("Contato bloqueado com sucesso", phone, "tag:", savedContact?.tag ?? normalizedTag);
+      return res.json({
+        ...savedContact,
+        message: 'Contato bloqueado com sucesso',
+        phone: savedContact?.phone ?? phone,
+        whatsappName: savedContact?.whatsappName ?? whatsappName,
+        tag: savedContact?.tag ?? normalizedTag,
+        status: savedContact?.status ?? "bloqueado",
+        block: savedContact?.block ?? true,
+        updatedAt: savedContact?.updatedAt ?? new Date().toISOString(),
+      });
     } else {
-      console.error("Erro ao bloquear contato", result.statusText);
+      const errorBody = await result.text().catch(() => '');
+      console.error("Erro ao bloquear contato", result.status, result.statusText, errorBody);
       return res.status(500).json({ success: false, error: "Erro ao bloquear contato" });
     }
   } catch (err) {

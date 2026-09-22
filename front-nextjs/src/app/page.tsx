@@ -1,9 +1,39 @@
 'use client';
 // pages
 import { useEffect, useState } from 'react';
-import { messageApi, messageApiRequest, fetchSessionInfo } from "@/utils/functions";
-import { getDefaultSessionId, getApiKey, getWhatsappApiBaseUrl, getMessageApiBaseUrl } from "@/utils/config";
-import { ClientContact, SessionInfo } from "@/utils/types";
+import {
+  messageApi,
+  messageApiRequest,
+  fetchSessionInfo,
+  sanitizeDdi,
+  validateLocalPhoneNumber,
+  buildFullPhoneNumber,
+  buildWhatsappPhoneId,
+  resolveContactName,
+  filterBlockedContacts,
+  filterUnblockedContacts,
+  findBlockedContactByNumber,
+  filterContactsByQuery,
+  filterContactsBySearchMode,
+  splitPhoneIntoDdiAndLocal,
+  paginateContacts,
+  getTotalPages,
+  formatUpdatedAt,
+} from '@/utils/functions';
+import {
+  DEFAULT_DDI,
+  DDI_MAX_LENGTH,
+  CONTACTS_PER_PAGE,
+  SEARCH_RESULTS_LIMIT,
+  ContactSearchMode,
+} from '@/utils/consts';
+import {
+  getDefaultSessionId,
+  getApiKey,
+  getWhatsappApiBaseUrl,
+  getMessageApiBaseUrl,
+} from '@/utils/config';
+import { ClientContact, SessionInfo } from '@/utils/types';
 
 import './page.css';
 
@@ -13,14 +43,54 @@ export default function ContactsPage() {
   const [isReady, setIsReady] = useState(false);
   const [isServerOnline, setIsServerOnline] = useState(true);
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [ddi, setDdi] = useState(DEFAULT_DDI);
   const [whatsappName, setWhatsappName] = useState('');
+  const [tag, setTag] = useState('');
+  const [contactFilter, setContactFilter] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
+
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<ContactSearchMode>('name');
+
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingContact, setEditingContact] = useState<ClientContact | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editTag, setEditTag] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const filteredContacts = filterContactsByQuery(contacts, contactFilter);
+  const totalPages = getTotalPages(filteredContacts.length, CONTACTS_PER_PAGE);
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedContacts = paginateContacts(
+    filteredContacts,
+    safePage,
+    CONTACTS_PER_PAGE
+  );
+
+  const unblockedContacts = filterUnblockedContacts(allContacts);
+  const searchableContacts = filterContactsBySearchMode(
+    unblockedContacts,
+    searchQuery,
+    searchMode
+  ).slice(0, SEARCH_RESULTS_LIMIT);
 
   // ===== CONFIGURAÇÕES =====
   const sessionId = getDefaultSessionId();
   const apiKey = getApiKey();
   const apiBaseUrl = getWhatsappApiBaseUrl();
   const messageApiBaseUrl = getMessageApiBaseUrl();
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [contactFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   useEffect(() => {
     const checkServer = async () => {
@@ -47,42 +117,65 @@ export default function ContactsPage() {
   // Carregar contatos ao iniciar
   useEffect(() => {
     messageApiRequest('/contacts?all=true')
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data: ClientContact[]) => {
         setAllContacts(data || []);
-        console.log("Todos os contatos carregados:", data);
-        return data.filter((c: ClientContact) => c.block && c.status.toLowerCase() === "bloqueado");
+        console.log('Todos os contatos carregados:', data);
+        return filterBlockedContacts(data || []);
       })
-      .then(data => setContacts(data || []))
-      .catch(err => console.error('Erro ao buscar contatos', err));
+      .then((data) => setContacts(data || []))
+      .catch((err) => console.error('Erro ao buscar contatos', err));
   }, [isReady]);
 
+  const handleDdiChange = (value: string) => {
+    setDdi(sanitizeDdi(value));
+  };
+
+  const openSearchModal = () => {
+    setSearchQuery('');
+    setSearchMode('name');
+    setIsSearchModalOpen(true);
+  };
+
+  const closeSearchModal = () => {
+    setIsSearchModalOpen(false);
+    setSearchQuery('');
+  };
+
+  const handleSelectContactToBlock = (contact: ClientContact) => {
+    const { ddi: contactDdi, local } = splitPhoneIntoDdiAndLocal(contact.phone);
+    setWhatsappName(contact.whatsappName || '');
+    setTag(contact.tag || '');
+    setDdi(sanitizeDdi(contactDdi));
+    setPhoneNumber(local);
+    closeSearchModal();
+  };
+
   const handleBlockContact = async () => {
+    if (!ddi) {
+      alert('DDI é obrigatório');
+      return;
+    }
     if (!phoneNumber) {
       alert('Número de telefone é obrigatório');
       return;
     }
-    const sanitizedNumber = phoneNumber.replace(/\D/g, '');
-    if (!/^\d{10,}$/.test(sanitizedNumber)) {
-      alert('Número inválido. Deve conter pelo menos 10 dígitos (incluindo DDD).');
+    if (!validateLocalPhoneNumber(phoneNumber)) {
+      alert('Número inválido. Informe o número com DDD (sem o código do país).');
       return;
     }
 
-    // Verifica se tem DDD (2 dígitos após o código do país)
-    if (!/^\d{2}\d{8,}$/.test(sanitizedNumber)) {
-      alert('Número inválido. Deve conter DDD (2 dígitos) após o código do país.');
-      return;
-    }
+    const fullNumber = buildFullPhoneNumber(ddi, phoneNumber);
 
-    // Verifica se o contato já existe e está bloqueado
-    const foundContact = allContacts.find(c => c.phone.includes(sanitizedNumber) && c.block);
-    if (foundContact) {
+    if (findBlockedContactByNumber(allContacts, fullNumber)) {
       alert('Contato já existe e está bloqueado.');
       return;
     }
+
     const newDocument = {
-      phone: `${sanitizedNumber}@c.us`,
-      name: whatsappName || "Desconhecido",
+      phone: buildWhatsappPhoneId(ddi, phoneNumber),
+      name: resolveContactName(whatsappName),
+      tag: tag.trim() || null,
     };
     const res = await messageApiRequest('/block-contact', {
       method: 'POST',
@@ -91,9 +184,18 @@ export default function ContactsPage() {
 
     if (res.ok) {
       const saved = await res.json();
-      setContacts(prev => [...prev, saved]);
+      setContacts((prev) => [...prev, saved]);
+      setAllContacts((prev) => {
+        const index = prev.findIndex((contact) => contact.phone === saved.phone);
+        if (index === -1) return [...prev, saved];
+        const next = [...prev];
+        next[index] = { ...next[index], ...saved };
+        return next;
+      });
       setPhoneNumber('');
+      setDdi(DEFAULT_DDI);
       setWhatsappName('');
+      setTag('');
     } else {
       console.error('Erro ao adicionar contato');
     }
@@ -101,38 +203,108 @@ export default function ContactsPage() {
 
   const handleDeleteContact = async (phone: string) => {
     const res = await messageApiRequest(`/contacts?phone=${phone}`, { method: 'DELETE' });
-    const resesponse = await res.json();
-    if (resesponse.success) {
-      setContacts(prev => prev.filter(c => c.phone !== phone));
-      setAllContacts(prev => prev.filter(c => c.phone !== phone));
+    const response = await res.json();
+    if (response.success) {
+      setContacts((prev) => prev.filter((c) => c.phone !== phone));
+      setAllContacts((prev) => prev.filter((c) => c.phone !== phone));
       alert(`Contato ${phone} removido com sucesso!`);
     } else {
       console.error('Erro ao remover contato');
     }
   };
 
+  const openEditModal = (contact: ClientContact) => {
+    setEditingContact(contact);
+    setEditName(contact.whatsappName || '');
+    setEditTag(contact.tag || '');
+    setIsEditModalOpen(true);
+  };
+
+  const closeEditModal = () => {
+    setIsEditModalOpen(false);
+    setEditingContact(null);
+    setEditName('');
+    setEditTag('');
+    setIsSavingEdit(false);
+  };
+
+  const handleSaveContactEdit = async () => {
+    if (!editingContact) return;
+
+    setIsSavingEdit(true);
+    try {
+      const res = await messageApiRequest('/contacts', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          phone: editingContact.phone,
+          whatsappName: resolveContactName(editName),
+          tag: editTag.trim() || null,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error('Erro ao editar contato');
+        alert('Não foi possível salvar as alterações.');
+        return;
+      }
+
+      const updated = await res.json();
+      const nextContact: ClientContact = {
+        ...editingContact,
+        ...updated,
+        whatsappName: updated.whatsappName ?? resolveContactName(editName),
+        tag: updated.tag ?? (editTag.trim() || null),
+        updatedAt: updated.updatedAt ?? new Date().toISOString(),
+      };
+
+      setContacts((prev) =>
+        prev.map((contact) =>
+          contact.phone === editingContact.phone ? nextContact : contact
+        )
+      );
+      setAllContacts((prev) =>
+        prev.map((contact) =>
+          contact.phone === editingContact.phone ? nextContact : contact
+        )
+      );
+      closeEditModal();
+    } catch (err) {
+      console.error('Erro ao editar contato:', err);
+      alert('Não foi possível salvar as alterações.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   /**
- * Componente para exibir informações da sessão
- */
+   * Componente para exibir informações da sessão
+   */
   const SessionInfoDisplay = () => {
     return (
-      sessionInfo !== null && (<div className="session-info">
-        {sessionInfo ? (
-          <>
-            <h3>✅ Sessão Conectada</h3>
-            <p><strong>Nome:</strong> {sessionInfo?.pushName}</p>
-            <p><strong>Telefone:</strong> {sessionInfo?.id}</p>
-            <p><strong>ID da Sessão:</strong> {sessionId}</p>
-            <a href={`${apiBaseUrl}/dashboard`} target="_blank" rel="noopener noreferrer">
-              <button className="form-button add">
-                Dashboard
-              </button>
-            </a>
-          </>
-        ) : (
-          <h3>❌ Sessão Desconectada</h3>
-        )}
-      </div>));
+      sessionInfo !== null && (
+        <div className="session-info">
+          {sessionInfo ? (
+            <>
+              <h3>✅ Sessão Conectada</h3>
+              <p>
+                <strong>Nome:</strong> {sessionInfo?.pushName}
+              </p>
+              <p>
+                <strong>Telefone:</strong> {sessionInfo?.id}
+              </p>
+              <p>
+                <strong>ID da Sessão:</strong> {sessionId}
+              </p>
+              <a href={`${apiBaseUrl}/dashboard`} target="_blank" rel="noopener noreferrer">
+                <button className="form-button add">Dashboard</button>
+              </a>
+            </>
+          ) : (
+            <h3>❌ Sessão Desconectada</h3>
+          )}
+        </div>
+      )
+    );
   };
 
   return (
@@ -150,21 +322,66 @@ export default function ContactsPage() {
                 type="text"
                 placeholder="👤 Nome do contato (opcional)"
                 value={whatsappName}
-                onChange={e => setWhatsappName(e.target.value)}
+                onChange={(e) => setWhatsappName(e.target.value)}
                 className="form-input"
               />
               <input
-                type="tel"
-                placeholder="📱 Número com DDD (ex: 11999999999)"
-                value={phoneNumber}
-                onChange={e => setPhoneNumber(e.target.value)}
+                type="text"
+                placeholder="🏷️ TAG (opcional)"
+                value={tag}
+                onChange={(e) => setTag(e.target.value)}
                 className="form-input"
-                pattern="[0-9]{10,15}"
               />
+              <div className="phone-input-group form-input-full">
+                <div className="ddi-field">
+                  <span className="ddi-prefix" aria-hidden="true">
+                    +
+                  </span>
+                  <input
+                    type="text"
+                    className="ddi-input"
+                    value={ddi}
+                    onChange={(e) => handleDdiChange(e.target.value)}
+                    inputMode="numeric"
+                    maxLength={DDI_MAX_LENGTH}
+                    aria-label="Código do país (DDI)"
+                    title="DDI (até 3 dígitos)"
+                  />
+                </div>
+                <input
+                  type="tel"
+                  placeholder="Número com DDD (ex: 11999999999)"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  className="form-input phone-number-input"
+                  pattern="[0-9]{8,15}"
+                  inputMode="numeric"
+                />
+              </div>
             </div>
-            <button onClick={handleBlockContact} className="form-button add">
-              🚫 Bloquear Contato
-            </button>
+            <div className="form-actions">
+              <button
+                type="button"
+                onClick={openSearchModal}
+                className="form-button secondary"
+              >
+                🔍 Buscar contatos
+              </button>
+              <button type="button" onClick={handleBlockContact} className="form-button add">
+                🚫 Bloquear Contato
+              </button>
+            </div>
+          </div>
+
+          <div className="filter-container">
+            <input
+              type="search"
+              className="form-input filter-input"
+              placeholder="🔍 Filtrar por nome, tag ou telefone"
+              value={contactFilter}
+              onChange={(e) => setContactFilter(e.target.value)}
+              aria-label="Filtrar contatos por nome, tag ou telefone"
+            />
           </div>
 
           <ul className="contacts-table">
@@ -175,47 +392,258 @@ export default function ContactsPage() {
                   <div className="contact-phone">Adicione contatos usando o formulário acima</div>
                 </div>
               </li>
+            ) : filteredContacts.length === 0 ? (
+              <li className="contacts-item">
+                <div className="contact-info">
+                  <div className="contact-name">🔎 Nenhum resultado</div>
+                  <div className="contact-phone">Tente outro nome ou número</div>
+                </div>
+              </li>
             ) : (
-              contacts.map(contact => (
-                <li key={contact.phone} className="contacts-item">
-                  <div className="contact-info">
-                    <div className="contact-name">
-                      {contact.whatsappName || "Sem nome"}
+              paginatedContacts.map((contact) => {
+                const updatedAtLabel = formatUpdatedAt(contact.updatedAt);
+
+                return (
+                  <li key={contact.phone} className="contacts-item">
+                    <div className="contact-info">
+                      <div className="contact-header">
+                        <div className="contact-name">{contact.whatsappName || 'Sem nome'}</div>
+                        {contact.tag && <span className="contact-tag">🏷️ {contact.tag}</span>}
+                      </div>
+                      <div className="contact-phone">📞 {contact?.phone?.split('@')?.[0]}</div>
+                      {updatedAtLabel && (
+                        <div className="contact-updated">🗓️ Alterado em {updatedAtLabel}</div>
+                      )}
                     </div>
-                    <div className="contact-phone">
-                      📞 {contact?.phone?.split('@')?.[0]}
+                    <div className="contact-actions">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(contact)}
+                        className="edit-button"
+                        title="Editar nome e tag do contato"
+                      >
+                        ✏️ Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteContact(contact.phone)}
+                        className="remove-button"
+                        title="Remover contato da lista de bloqueados"
+                      >
+                        🗑️ Remover
+                      </button>
                     </div>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteContact(contact.phone)}
-                    className="remove-button"
-                    title="Remover contato da lista de bloqueados"
-                  >
-                    🗑️ Remover
-                  </button>
-                </li>
-              ))
+                  </li>
+                );
+              })
             )}
           </ul>
+
+          {filteredContacts.length > 0 && (
+            <div className="pagination">
+              <button
+                type="button"
+                className="pagination-button"
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                disabled={safePage <= 1}
+              >
+                Anterior
+              </button>
+              <span className="pagination-info">
+                Página {safePage} de {totalPages}
+              </span>
+              <button
+                type="button"
+                className="pagination-button"
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                disabled={safePage >= totalPages}
+              >
+                Próxima
+              </button>
+            </div>
+          )}
+
+          {isSearchModalOpen && (
+            <div
+              className="modal-overlay"
+              onClick={closeSearchModal}
+              role="presentation"
+            >
+              <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="search-contacts-title"
+              >
+                <div className="modal-header">
+                  <h2 id="search-contacts-title">Buscar contatos a bloquear</h2>
+                  <button
+                    type="button"
+                    className="modal-close"
+                    onClick={closeSearchModal}
+                    aria-label="Fechar"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="modal-search-controls">
+                  <input
+                    type="search"
+                    className="form-input filter-input"
+                    placeholder={
+                      searchMode === 'name'
+                        ? 'Pesquisar por nome...'
+                        : 'Pesquisar por número...'
+                    }
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    autoFocus
+                  />
+
+                  <label className="search-mode-switch">
+                    <span className={searchMode === 'name' ? 'active' : ''}>Nome</span>
+                    <input
+                      type="checkbox"
+                      checked={searchMode === 'phone'}
+                      onChange={(e) =>
+                        setSearchMode(e.target.checked ? 'phone' : 'name')
+                      }
+                      aria-label="Alternar busca entre nome e número"
+                    />
+                    <span className="switch-track" aria-hidden="true">
+                      <span className="switch-thumb" />
+                    </span>
+                    <span className={searchMode === 'phone' ? 'active' : ''}>Número</span>
+                  </label>
+                </div>
+
+                <ul className="modal-results">
+                  {unblockedContacts.length === 0 ? (
+                    <li className="modal-empty">Nenhum contato disponível para bloquear</li>
+                  ) : searchableContacts.length === 0 ? (
+                    <li className="modal-empty">Nenhum resultado para a busca</li>
+                  ) : (
+                    searchableContacts.map((contact) => (
+                      <li key={contact.phone} className="modal-result-item">
+                        <div className="contact-info">
+                          <div className="contact-name">
+                            {contact.whatsappName || 'Sem nome'}
+                          </div>
+                          <div className="contact-phone">
+                            📞 {contact.phone?.split('@')?.[0]}
+                          </div>
+                          {contact.tag && (
+                            <div className="contact-tag">🏷️ {contact.tag}</div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="select-button"
+                          onClick={() => handleSelectContactToBlock(contact)}
+                        >
+                          Selecionar
+                        </button>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {isEditModalOpen && editingContact && (
+            <div
+              className="modal-overlay"
+              onClick={closeEditModal}
+              role="presentation"
+            >
+              <div
+                className="modal-content modal-content-sm"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="edit-contact-title"
+              >
+                <div className="modal-header">
+                  <h2 id="edit-contact-title">Editar contato</h2>
+                  <button
+                    type="button"
+                    className="modal-close"
+                    onClick={closeEditModal}
+                    aria-label="Fechar"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <p className="modal-subtitle">
+                  📞 {editingContact.phone?.split('@')?.[0]}
+                </p>
+
+                <div className="modal-edit-fields">
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="👤 Nome do contato"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    autoFocus
+                  />
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="🏷️ TAG (opcional)"
+                    value={editTag}
+                    onChange={(e) => setEditTag(e.target.value)}
+                  />
+                </div>
+
+                <div className="modal-edit-actions">
+                  <button
+                    type="button"
+                    className="form-button secondary"
+                    onClick={closeEditModal}
+                    disabled={isSavingEdit}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="form-button add"
+                    onClick={handleSaveContactEdit}
+                    disabled={isSavingEdit}
+                  >
+                    {isSavingEdit ? 'Salvando...' : 'Salvar'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : isServerOnline ? (
+        <div className="page-container">
+          <div className="loading-container">
+            <div className="loading-spinner"></div>
+            <h2>Carregando aplicação...</h2>
+            <p>Conectando ao servidor de mensagens</p>
+          </div>
         </div>
       ) : (
-        isServerOnline ? (
-          <div className="page-container">
-            <div className="loading-container">
-              <div className="loading-spinner"></div>
-              <h2>Carregando aplicação...</h2>
-              <p>Conectando ao servidor de mensagens</p>
-            </div>
+        <div className="page-container">
+          <div className="error-container">
+            <h2>🔌 Servidor Offline</h2>
+            <p>Não foi possível conectar ao servidor de mensagens.</p>
+            <p>
+              Verifique se o servidor está rodando na porta{' '}
+              <a href={`${messageApiBaseUrl}/api/ping`} target="_blank" rel="noopener noreferrer">
+                {messageApiBaseUrl}
+              </a>
+              .
+            </p>
           </div>
-        ) : (
-          <div className="page-container">
-            <div className="error-container">
-              <h2>🔌 Servidor Offline</h2>
-              <p>Não foi possível conectar ao servidor de mensagens.</p>
-              <p>Verifique se o servidor está rodando na porta <a href={`${messageApiBaseUrl}/api/ping`} target="_blank" rel="noopener noreferrer">{messageApiBaseUrl}</a>.</p>
-            </div>
-          </div>
-        )
+        </div>
       )}
     </>
   );

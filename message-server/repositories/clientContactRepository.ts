@@ -25,9 +25,15 @@ export class ClientContactRepository {
   }
 
   async updateContactByPhone(phone: string, newDocument: Partial<UpdateClientContact>) {
-    return ClientContactModel.updateOne(
+    // Remove undefined para não apagar campos acidentalmente; null é permitido (ex.: limpar tag)
+    const sanitizedUpdate = Object.fromEntries(
+      Object.entries(newDocument).filter(([, value]) => value !== undefined)
+    );
+
+    return ClientContactModel.findOneAndUpdate(
       { phone },
-      { $set: newDocument }
+      { $set: { ...sanitizedUpdate, updatedAt: new Date() } },
+      { new: true, runValidators: true, timestamps: true }
     );
   }
 

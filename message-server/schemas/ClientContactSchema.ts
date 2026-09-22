@@ -18,6 +18,7 @@ export const ClientContactSchema = z.object({
   whatsappName: z.string().nullable().optional(),
   phone: z.string(),
   status: z.string(),
+  tag: z.string().nullable().optional(),
   service: z.string().nullable().optional(),
   form: FormSchema.nullable().optional(),
   boardId: z.string().nullable().optional(),
