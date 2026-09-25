@@ -6,6 +6,7 @@ import {
   messageApiRequest,
   fetchSessionInfo,
   sanitizeDdi,
+  maskLocalPhoneNumber,
   validateLocalPhoneNumber,
   buildFullPhoneNumber,
   buildWhatsappPhoneId,
@@ -128,7 +129,13 @@ export default function ContactsPage() {
   }, [isReady]);
 
   const handleDdiChange = (value: string) => {
-    setDdi(sanitizeDdi(value));
+    const nextDdi = sanitizeDdi(value);
+    setDdi(nextDdi);
+    setPhoneNumber((prev) => maskLocalPhoneNumber(prev, nextDdi));
+  };
+
+  const handlePhoneNumberChange = (value: string) => {
+    setPhoneNumber(maskLocalPhoneNumber(value, ddi));
   };
 
   const openSearchModal = () => {
@@ -147,7 +154,7 @@ export default function ContactsPage() {
     setWhatsappName(contact.whatsappName || '');
     setTag(contact.tag || '');
     setDdi(sanitizeDdi(contactDdi));
-    setPhoneNumber(local);
+    setPhoneNumber(maskLocalPhoneNumber(local, contactDdi));
     closeSearchModal();
   };
 
@@ -160,12 +167,13 @@ export default function ContactsPage() {
       alert('Número de telefone é obrigatório');
       return;
     }
-    if (!validateLocalPhoneNumber(phoneNumber)) {
+    const localNumber = maskLocalPhoneNumber(phoneNumber, ddi);
+    if (!validateLocalPhoneNumber(localNumber)) {
       alert('Número inválido. Informe o número com DDD (sem o código do país).');
       return;
     }
 
-    const fullNumber = buildFullPhoneNumber(ddi, phoneNumber);
+    const fullNumber = buildFullPhoneNumber(ddi, localNumber);
 
     if (findBlockedContactByNumber(allContacts, fullNumber)) {
       alert('Contato já existe e está bloqueado.');
@@ -173,7 +181,7 @@ export default function ContactsPage() {
     }
 
     const newDocument = {
-      phone: buildWhatsappPhoneId(ddi, phoneNumber),
+      phone: buildWhatsappPhoneId(ddi, localNumber),
       name: resolveContactName(whatsappName),
       tag: tag.trim() || null,
     };
@@ -352,9 +360,8 @@ export default function ContactsPage() {
                   type="tel"
                   placeholder="Número com DDD (ex: 11999999999)"
                   value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  onChange={(e) => handlePhoneNumberChange(e.target.value)}
                   className="form-input phone-number-input"
-                  pattern="[0-9]{8,15}"
                   inputMode="numeric"
                 />
               </div>

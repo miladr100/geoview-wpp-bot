@@ -7,6 +7,9 @@ export const DDI_MAX_LENGTH = 3;
 /** Quantidade mínima de dígitos do número local (DDD + número) */
 export const MIN_LOCAL_PHONE_DIGITS = 8;
 
+/** Quantidade máxima de dígitos do número local (sem DDI) */
+export const MAX_LOCAL_PHONE_DIGITS = 11;
+
 /** Sufixo de ID do WhatsApp */
 export const WHATSAPP_ID_SUFFIX = '@c.us';
 

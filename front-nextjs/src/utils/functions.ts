@@ -4,6 +4,7 @@ import {
   DEFAULT_DDI,
   DDI_MAX_LENGTH,
   MIN_LOCAL_PHONE_DIGITS,
+  MAX_LOCAL_PHONE_DIGITS,
   WHATSAPP_ID_SUFFIX,
   BLOCKED_STATUS,
   ContactSearchMode,
@@ -55,7 +56,34 @@ export const sanitizeDdi = (value: string) =>
 /** Valida o número local (sem DDI) */
 export const validateLocalPhoneNumber = (phone: string) => {
   const cleaned = sanitizeDigits(phone);
-  return cleaned.length >= MIN_LOCAL_PHONE_DIGITS;
+  return (
+    cleaned.length >= MIN_LOCAL_PHONE_DIGITS &&
+    cleaned.length <= MAX_LOCAL_PHONE_DIGITS
+  );
+};
+
+/**
+ * Máscara do número local:
+ * - só dígitos
+ * - se colarem/digitarem o DDI junto (ex: 5531995666706), remove o prefixo do DDI
+ * - limita ao tamanho máximo do número local
+ */
+export const maskLocalPhoneNumber = (value: string, ddi: string) => {
+  let digits = sanitizeDigits(value);
+  const ddiDigits = sanitizeDigits(ddi);
+
+  // Só remove o DDI quando o valor claramente inclui país + número local
+  // (evita cortar DDDs brasileiros que começam com "55", ex.: Santa Maria)
+  if (
+    ddiDigits &&
+    digits.startsWith(ddiDigits) &&
+    digits.length > MAX_LOCAL_PHONE_DIGITS &&
+    digits.length - ddiDigits.length >= MIN_LOCAL_PHONE_DIGITS
+  ) {
+    digits = digits.slice(ddiDigits.length);
+  }
+
+  return digits.slice(0, MAX_LOCAL_PHONE_DIGITS);
 };
 
 /** Monta o número completo sem +: DDI + número local */
